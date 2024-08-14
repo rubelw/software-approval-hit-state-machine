@@ -5,4 +5,5 @@ resource "aws_athena_workgroup" "example" {
       output_location = "s3://${var.output_bucket_name}/"
     }
   }
+  force_destroy = true
 }

@@ -1,12 +1,25 @@
 import json
 import boto3
 import time
+import datetime
 import os
 import secrets
-from boto3.dynamodb.conditions import Key
+import inspect
+import re
+import mysql.connector
+
+def lineno():
+    """
+    Print line number
+    """
+    return str('  - line number: ' +
+               str(inspect.currentframe().f_back.f_lineno))  # pragma: no cover
 
 
-stepfunctions = boto3.client('stepfunctions')
+
+def is_valid_email(email):
+    pattern = r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$'
+    return re.match(pattern, email) is not None
 
 
 def generate_urlsafe_token(length=32):
@@ -38,6 +51,34 @@ def lambda_handler(event, context):
 
 
     if 'path' in event:
+        if event['path'] == '/clear':
+            connection = mysql.connector.connect(
+                host=os.environ['DB_HOST'],
+                user=os.environ['DB_USER'],
+                password=os.environ['DB_PASSWORD'],
+                database=os.environ['DB_NAME']
+            )
+
+            cursor = connection.cursor()
+            select_query = "DELETE FROM requested_approval"
+            print('query: ' + str(select_query) + lineno())
+            cursor.execute(select_query)
+            connection.commit()
+
+            select_query = "DELETE FROM approved_software"
+            print('query: ' + str(select_query) + lineno())
+            cursor.execute(select_query)
+            connection.commit()
+
+            response = {
+                "statusCode": 200,
+                "headers": {
+                    "Content-Type": "application/json"
+                },
+                "body": json.dumps({"Message": "Databases cleaned-up"})
+            }
+            return response
+
         if event['path'] == '/approve':
 
             if 'queryStringParameters' in event:
@@ -47,48 +88,113 @@ def lambda_handler(event, context):
                     print('has auth token')
                     token = event['queryStringParameters']['authToken']
                     print('token: ' + str(token))
-                    approval_token = event['queryStringParameters']['token']
-                    print('approval token: '+str(approval_token))
+
 
                     try:
-                        print('Trying to query dynamodb')
+                        print('Trying to query request table'+lineno())
 
-                        dynamodb = boto3.resource('dynamodb')
-                        table = dynamodb.Table(os.environ['DYNAMODB_APPROVED_TABLE_NAME'])
-
-                        response = table.query(
-                            IndexName='TokenIndex',
-                            KeyConditionExpression=Key('token').eq(approval_token)
+                        connection = mysql.connector.connect(
+                            host=os.environ['DB_HOST'],
+                            user=os.environ['DB_USER'],
+                            password=os.environ['DB_PASSWORD'],
+                            database=os.environ['DB_NAME']
                         )
 
-                        print('response: ' + str(response))
+                        cursor = connection.cursor()
 
-                        if 'Items' in response:
-                            print('item in response')
+                        select_query = "SELECT * FROM requested_approval WHERE token ='" + str(token)+"'"
 
-                            # Current time in seconds since epoch
-                            current_time = int(time.time())
+                        print('query: '+str(select_query)+lineno())
 
-                            # Set the TTL attribute value (current time + number of seconds to live)
-                            ttl_value = current_time + (int(1) * 7776000)
+                        cursor.execute(select_query)
 
-                            # Set the TTL attribute value (current time + number of seconds to live)
-                            ttl_value = current_time  # 90 days
+                        # Fetch all rows as dictionaries
+                        results = cursor.fetchall()
 
-                            # Define the primary key of the item to update
-                            key = {
-                                "token": {"S": str(token)}
+                        # results: [(4, 'mr6mmYLfplhmKy8F2ltJ_0JCSB8pDmWXE_7lPXHjoag', 'CVE-2020-11978',
+                        # 'Apache', 'airflow', 'willrubel@gmail.com', 'willrubel@gmail.com',
+                        # datetime.datetime(2024, 8, 14, 10, 8, 32, 608436)),
+                        # (5, 'mr6mmYLfplhmKy8F2ltJ_0JCSB8pDmWXE_7lPXHjoag', 'CVE-2020-13927', 'Apache',
+                        # 'airflow', 'willrubel@gmail.com', 'willrubel@gmail.com', datetime.datetime(2024, 8, 14, 10, 8, 32, 628620))]
+                        print('results: ' + str(results) + lineno())
+
+                        cursor.close()
+
+                        if len(results)>0:
+                            print('item in response: '+lineno())
+
+                            for item in results:
+                                print('item: '+str(item)+lineno())
+
+                                cursor = connection.cursor()
+
+                                select_query = "SELECT * FROM approved_software WHERE cve ='" + str(item[2])+"'"
+
+                                cursor.execute(select_query)
+
+                                # Fetch all rows as dictionaries
+                                approved_results = cursor.fetchall()
+                                print('approved results: ' + str(approved_results) + lineno())
+
+
+                                if len(approved_results)<1:
+                                    print("No approved results"+lineno())
+
+                                    current_datetime = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+
+                                    print('Prepare the item to be inserted' + lineno())
+                                    print('cve: ' + str(item[2]) + lineno())
+                                    print('vendor: ' + str(item[3]))
+                                    print('software: '+str(item[4])+lineno())
+                                    print('requestor: ' + str(item[5]))
+                                    print('approver: '+str(item[6])+lineno())
+
+
+                                    cursor2 = connection.cursor()
+
+                                    # CREATE TABLE approved_software (id INT AUTO_INCREMENT PRIMARY KEY,
+                                    # cve VARCHAR(50) NOT NULL,vendor VARCHAR(50) NOT NULL,
+                                    # software VARCHAR(100),requestor VARCHAR(100),
+                                    # approver VARCHAR(100),approved_at DATETIME(6) NOT NULL);
+
+                                    insert_query = "INSERT INTO approved_software (cve, vendor, software, requestor, approver,approved_at) VALUES ('" + str(
+                                        item[2]) + "','" + str(item[3]) + "','" + str(
+                                        item[4]) + "','" + str(item[5]) + "','" + str(
+                                        item[6]) + "','" + str(current_datetime) + "')"
+
+                                    print('insert query: ' + str(insert_query) + lineno())
+                                    cursor2.execute(insert_query)
+                                    connection.commit()
+                                    cursor2.close()
+
+                                    print('Insert the item into the table' + lineno())
+
+
+
+                                else:
+                                    print('Already approved'+lineno())
+
+
+
+                            response = {
+                                "statusCode": 200,
+                                "headers": {
+                                    "Content-Type": "application/json"
+                                },
+                                "body": json.dumps({"Message": "Approved"})
                             }
+                            return response
 
-                            # Define the update expression
-                            update_expression = "SET status = :status"
-
-                            # Define the expression attribute values
-                            expression_attribute_values = {
-                                ":status": "approved"
+                        else:
+                            print('Token not in requested table' + lineno())
+                            response = {
+                                "statusCode": 500,
+                                "headers": {
+                                    "Content-Type": "application/json"
+                                },
+                                "body": json.dumps({"Message": "Problem with token"})
                             }
-
-                            update_dynamodb_table(token, update_expression, expression_attribute_values)
+                            return response
 
                     except Exception as e:
                         print(e)
@@ -102,32 +208,10 @@ def lambda_handler(event, context):
                         }
                         return response
 
-                    # Prepare the output data
-                    output_data = {
-                        'status': 'success',
-                        'message': 'Task completed successfully',
-                        'result': {
-                            # Add any results or output you want to pass back to the Step Function
-                        }
-                    }
-
-                    try:
-                        response = stepfunctions.send_task_success(
-                            taskToken=token,
-                            output=json.dumps(output_data)
-                        )
-                    except Exception as e:
-                        print(f"Error completing task: {e}")
-                        response = stepfunctions.send_task_failure(
-                            taskToken=token,
-                            error='TaskFailure',
-                            cause=str(e)
-                        )
-
                 else:
                     return {
                         'statusCode': 400,
-                        'body': 'Missing task token'
+                        'body': 'Missing  token'
                     }
 
 
@@ -141,20 +225,78 @@ def lambda_handler(event, context):
             return response
 
         elif event['path'] == '/deny':
-            response = {
-                "statusCode": 500,
-                "headers": {
-                    "Content-Type": "application/json"
-                },
-                "body": json.dumps({"Message": "Has deny"})
-            }
-            return response
+            if 'queryStringParameters' in event:
+                print('has query string parameter')
+
+                if 'authToken' in event['queryStringParameters']:
+                    print('has auth token')
+                    token = event['queryStringParameters']['authToken']
+                    print('token: ' + str(token))
+
+                    try:
+                        print('Trying to query request table' + lineno())
+
+                        connection = mysql.connector.connect(
+                            host=os.environ['DB_HOST'],
+                            user=os.environ['DB_USER'],
+                            password=os.environ['DB_PASSWORD'],
+                            database=os.environ['DB_NAME']
+                        )
+
+                        cursor = connection.cursor()
+
+                        select_query = "DELETE FROM requested_approval WHERE token ='" + str(token) + "'"
+
+                        print('query: ' + str(select_query) + lineno())
+
+                        cursor.execute(select_query)
+
+
+
+                        response = {
+                            "statusCode": 500,
+                            "headers": {
+                                "Content-Type": "application/json"
+                            },
+                            "body": json.dumps({"Message": "Has deny"})
+                        }
+                        return response
+
+                    except Exception as e:
+                        print(e)
+
+                        response = {
+                            "statusCode": 500,
+                            "headers": {
+                                "Content-Type": "application/json"
+                            },
+                            "body": json.dumps({"Message": "Problem with dynamodb"})
+                        }
+                        return response
+                else:
+                    response = {
+                        "statusCode": 500,
+                        "headers": {
+                            "Content-Type": "application/json"
+                        },
+                        "body": json.dumps({"Message": "No auth token found"})
+                    }
+                    return response
+            else:
+                response = {
+                    "statusCode": 500,
+                    "headers": {
+                        "Content-Type": "application/json"
+                    },
+                    "body": json.dumps({"Message": "No query parameter found"})
+                }
+                return response
+
+
         else:
-
-
             if 'body' in event:
                 data = json.loads(event['body'])
-                print('data: ' + str(data))
+                print('data: ' + str(data)+lineno())
 
                 values_to_check = [
                     "Vendor",
@@ -171,7 +313,7 @@ def lambda_handler(event, context):
 
                 if all_values_present:
 
-                    print('Initialize Athena client')
+                    print('Initialize Athena client'+lineno())
                     client = boto3.client('athena')
 
                     # Define query parameters
@@ -185,6 +327,7 @@ def lambda_handler(event, context):
                     query = 'SELECT cvdid, product, vulnerabilityname FROM cve_table where LOWER(vendorproject) LIKE LOWER(\'%'+str(data['Vendor'])+'%\') and LOWER(product) LIKE LOWER(\'%'+str(data['Software'])+'%\')'  # Your SQL query
                     output_location = 's3://output-bucket-1234534452342/'
 
+                    print('query string: '+str(query)+lineno())
                     # Start query execution
                     response = client.start_query_execution(
                         QueryString=query,
@@ -198,8 +341,8 @@ def lambda_handler(event, context):
                     )
 
                     query_execution_id = response['QueryExecutionId']
-                    print('response: '+str(response))
-                    print('query id: '+str(query_execution_id))
+                    print('response: '+str(response)+lineno())
+                    print('query id: '+str(query_execution_id)+lineno())
                     # Poll for query completion
                     while True:
                         response = client.get_query_execution(QueryExecutionId=query_execution_id)
@@ -218,7 +361,9 @@ def lambda_handler(event, context):
                     # Extract and format results
                     rows = []
                     for row in results['ResultSet']['Rows']:
-                        print('row: '+str(row))
+                        print('row: '+str(row)+lineno())
+                        if row['Data'][0]['VarCharValue'] == 'cvid':
+                            continue
 
                         temp_hash = {}
                         temp_hash['cve'] = row['Data'][0]['VarCharValue']
@@ -227,120 +372,243 @@ def lambda_handler(event, context):
 
                         rows.append(temp_hash)
 
-                    print('Add rows to approved cves table')
-
-                    # Initialize the DynamoDB client
                     dynamodb = boto3.resource('dynamodb')
-                    table = dynamodb.Table(os.environ['DYNAMODB_APPROVED_TABLE_NAME'])
-
-                    unapproved_rows = []
+                    # Initialize the DynamoDB client
+                    table = dynamodb.Table(os.environ['DYNAMODB_TABLE_NAME'])
                     token = generate_urlsafe_token(32)
 
-                    try:
+                    # Current time in seconds since epoch
+                    current_time = int(time.time())
 
-                        counter = 0
-                        for row in rows:
-                            if counter <1:  # Skip the header row
-                                counter=counter+1
-                                continue
+                    # Set the TTL attribute value (current time + number of seconds to live)
+                    ttl_value = current_time + (int(1) * 7776000)
 
-                            response = table.query(
-                                KeyConditionExpression=Key('cve').eq(row['cve'])
-                            )
+                    # Set the TTL attribute value (current time + number of seconds to live)
+                    ttl_value = current_time  # 90 days
 
-                            print('response: ' + str(response))
+                    item = {
+                        'token': token,
+                        'ttl': ttl_value
+                    }
 
-                            if 'Items' in response:
-                                print('item in response')
+                    print('Insert the item into the table'+lineno())
+                    table.put_item(Item=item)
 
-                                # Current time in seconds since epoch
-                                current_time = int(time.time())
+                    connection = mysql.connector.connect(
+                        host=os.environ['DB_HOST'],
+                        user=os.environ['DB_USER'],
+                        password=os.environ['DB_PASSWORD'],
+                        database=os.environ['DB_NAME']
+                    )
 
-                                # Set the TTL attribute value (current time + number of seconds to live)
-                                ttl_value = current_time + (int(1) * 7776000)
+                    cursor = connection.cursor()
 
-                                # Set the TTL attribute value (current time + number of seconds to live)
-                                ttl_value = current_time  # 90 days
+                    insert_query = "INSERT INTO requested_tokens (token) VALUES (%(token)s)"
+                    newdata = {
+                        'token': str(token)
+                    }
 
-                                print('Prepare the item to be inserted')
-                                print('cve: '+str(row['cve']))
-                                print('vendor: '+str(data['Vendor']))
-                                print('requestor: '+str(data['Requestor']))
+                    cursor.execute(insert_query, newdata)
+                    connection.commit()
 
-                                item = {
-                                    'token': token,
-                                    'cve': row['cve'],
-                                    'vendor': data['Vendor'],
-                                    'software': data['Software'],
-                                    'requestor': data['Requestor'],
-                                    'approver': data['Approver'],
-                                    'status': 'pending',
-                                    'ttl': ttl_value
-                                }
+                    print('inserted token into requested_tokens'+lineno())
 
-                                print('Insert the item into the DynamoDB table')
-                                table.put_item(Item=item)
+                    unapproved_cves= []
+                    if len(rows)>0:
+                        print('has rows'+lineno())
+                        try:
+                            counter = 0
+                            for row in rows:
+                                if counter < 1:  # Skip the header row
+                                    counter = counter + 1
+                                    continue
 
+                                select_query = "SELECT * FROM approved_software  WHERE cve='"+str(row['cve'])+"'"
+                                print('select query: '+str(select_query)+lineno())
+                                cursor2 = connection.cursor()
+
+                                cursor2.execute(select_query)
+
+                                # Fetch all rows as dictionaries
+                                results = cursor2.fetchall()
+                                print('results: '+str(results)+lineno())
+
+                                if len(results)>0:
+                                    print('has approved software - not doing anything'+lineno())
+
+                                else:
+                                    print('no item in approved software'+lineno())
+                                    # Current time in seconds since epoch
+                                    current_datetime = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+
+                                    print('Prepare the item to be inserted' + lineno())
+                                    print('cve: ' + str(row['cve']) + lineno())
+                                    print('vendor: ' + str(data['Vendor']))
+                                    print('software: '+str(data['Software'])+lineno())
+                                    print('requestor: ' + str(data['Requestor']))
+                                    print('approver: '+str(data['Approver'])+lineno())
+
+                                    # CREATE TABLE requested_approval (id INT AUTO_INCREMENT PRIMARY KEY,
+                                    # token VARCHAR(50) NOT NULL,
+                                    # cve VARCHAR(50) NOT NULL,
+                                    # vendor VARCHAR(50) NOT NULL,
+                                    # software VARCHAR(100),
+                                    # requestor VARCHAR(100),
+                                    # approver VARCHAR(100),
+                                    # requested_date DATE NOT NULL,FOREIGN KEY (token) REFERENCES requested_tokens(token) ON DELETE CASCADE);
+
+                                    cursor2 = connection.cursor()
+
+                                    insert_query = "INSERT INTO requested_approval (token, cve, vendor, software, approver, requestor,requested_at) VALUES ('" + str(token) + "','" + str(row['cve']) + "','"  + str(data['Vendor']) + "','" + str(data['Software']) + "','" + str(data['Approver']) + "','" + str(data['Requestor']) + "','" + str(current_datetime)+"')"
+
+                                    print('insert query: '+str(insert_query)+lineno())
+                                    cursor2.execute(insert_query, data)
+                                    connection.commit()
+                                    cursor2.close()
+
+                                    print('Insert the item into the table' + lineno())
+                                    print('item: ' + str(item) + lineno())
+                                    print('row: ' + str(row) + lineno())
+
+                                    unapproved_cves.append(row['cve'])
+
+                        except Exception as e:
+
+                            print('Exception: '+str(e))
+                            connection.close()
+
+                            response = {
+                                "statusCode": 500,
+                                "headers": {
+                                    "Content-Type": "application/json"
+                                },
+                                "body": json.dumps({"Message": "Problem with dynamodb"})
+                            }
+                            return response
+
+
+                    if len(unapproved_cves)>0:
+                        print('unapproved cves: '+str(unapproved_cves)+lineno())
+
+                        print('Insert token into dynamodb')
+                        dynamodb = boto3.resource('dynamodb')
+                        table = dynamodb.Table(os.environ['DYNAMODB_TABLE_NAME'])
+
+                        # Current time in seconds since epoch
+                        current_time = int(time.time())
+
+                        # Set the TTL attribute value (current time + number of seconds to live)
+                        ttl_value = current_time + (int(1) * 7200)
+
+                        # Prepare the item to be inserted
+                        item = {
+                            'token': token,
+                            'ttl': ttl_value
+                        }
+
+                        # Insert the item into the DynamoDB table
+                        table.put_item(Item=item)
+
+                        print('Item inserted successfully!')
+
+                        if is_valid_email(os.environ['SENDER']):
+                            print('email is valid')
+
+                            print('All values present')
+                            # SES client
+                            ses_client = boto3.client('ses')
+
+                            print('data: '+str(data))
+                            # Email parameters
+                            SENDER = os.environ['SENDER']
+                            RECIPIENT = data['Approver']
+                            SUBJECT = "Software approval request for "+str(data['Software'])
+                            BODY_TEXT = "This email was sent with Amazon SES using the AWS SDK for Python (Boto)."
+
+                            # The email body for recipients with non-HTML email clients.
+
+                            approve_api_url = os.environ['API_URL'] + "/approve?authToken=" + str(token)
+                            deny_api_url = os.environ['API_URL'] + "/deny?authToken=" + str(token)
+
+                            # Convert list to HTML unordered list
+                            html_content = "<ul>\n"
+                            for item in unapproved_cves:
+                                html_content += f"    <li>https://nvd.nist.gov/vuln/detail/{item}</li>\n"
+                            html_content += "</ul>"
+
+
+                            BODY_HTML = f"""
+                            <html>
+                            <head></head>
+                            <body>
+                            <h1>Approved Software Test</h1>
+                            {html_content}
+                            <p>Requestor: {data['Requestor']} has requested approval of the following CVEs. Please review and select 'Approve' or 'Deny'.</p>
+                            <p><a href="{approve_api_url}">Approve</a></p>
+                            <p><a href="{deny_api_url}">Deny</a></p>
+                            </body>
+                            </html>"""
+
+                            print('body: ' + str(BODY_HTML)+lineno())
+
+                            CHARSET = "UTF-8"
+
+                            # Try to send the email.
+                            try:
+                                # Provide the contents of the email.
+                                response = ses_client.send_email(
+                                    Destination={
+                                        'ToAddresses': [
+                                            RECIPIENT,
+                                        ],
+                                    },
+                                    Message={
+                                        'Body': {
+                                            'Html': {
+                                                'Charset': CHARSET,
+                                                'Data': BODY_HTML,
+                                            },
+                                            'Text': {
+                                                'Charset': CHARSET,
+                                                'Data': BODY_TEXT,
+                                            },
+                                        },
+                                        'Subject': {
+                                            'Charset': CHARSET,
+                                            'Data': SUBJECT,
+                                        },
+                                    },
+                                    Source=SENDER,
+                                )
+                            except ClientError as e:
+                                print(e.response['Error']['Message'])
                             else:
-                                print('no item in response')
+                                print("Email sent! Message ID:"),
+                                print(response['MessageId'])
 
-                                unapproved_rows.append[row]
-
-                    except Exception as e:
-
-                        print(e)
-
+                            return {
+                                'statusCode': 200,
+                                'body': json.dumps('Email sent successfully!')
+                            }
+                        else:
+                            print('Missing required parameters4')
+                            response = {
+                                "statusCode": 200,
+                                "headers": {
+                                    "Content-Type": "application/json"
+                                },
+                                "body": json.dumps({"Message": "Email is invalid"})
+                            }
+                            return response
+                    else:
                         response = {
                             "statusCode": 500,
                             "headers": {
                                 "Content-Type": "application/json"
                             },
-                            "body": json.dumps({"Message": "Problem with dynamodb"})
+                            "body": json.dumps({"Message": "No un-approved software found"})
                         }
                         return response
-
-                    if len(results['ResultSet']['Rows'])<2:
-                        print('Has less than 2 rows')
-                        # Fetch the ARN of the second Lambda function from environment variables
-                        second_lambda_arn = os.environ['SECOND_LAMBDA_ARN']
-
-
-                        print('Invoke the second Lambda function')
-                        response = client.invoke(
-                            FunctionName=second_lambda_arn,
-                            InvocationType='Event',  # Use 'RequestResponse' for synchronous invocation
-                            Payload=json.dumps({'cves': rows, 'requestor': data['Requestor'],'approver':data['Approver']})
-                        )
-
-                        return {
-                            'statusCode': 200,
-                            'body': json.dumps('Lambda 2 invoked successfully'),
-                            'response': response
-                        }
-                    else:
-
-                        #row: {'Data': [{'VarCharValue': 'CVE-2020-11978'}, {'VarCharValue': 'Airflow'},
-                        #               {'VarCharValue': 'Apache Airflow Command Injection'}]}
-
-                        print('starting step function')
-                        client = boto3.client('stepfunctions')
-
-                        # Fetch the State Machine ARN from environment variables
-                        state_machine_arn = os.environ['STATE_MACHINE_ARN']
-
-                        event['token'] = token
-                        # Start State Machine execution
-                        response = client.start_execution(
-                            stateMachineArn=state_machine_arn,
-                            name = token,
-                            input=json.dumps(event)  # Pass the event as input to the state machine
-                        )
-
-                        return {
-                            'statusCode': 200,
-                            'body': json.dumps('State machine execution started successfully'),
-                            'executionArn': response['executionArn']
-                        }
 
                 else:
                     response = {

@@ -112,6 +112,9 @@ def create_lambda_package(lambda_code_file,package_dir,zip_file):
     # Install dependencies
     subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'urllib3==1.26.14', '-t', package_dir])
     subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'requests', '-t', package_dir])
+    subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'mysql-connector-python', '-t', package_dir])
+
+
 
     # Copy the Lambda function code into the directory
     shutil.copy(lambda_code_file, package_dir)
@@ -220,8 +223,6 @@ def main(arguments):
 
         create_lambda_package(mycwd+'/tf/lambda_function_5.py','lambda_package5',mycwd+'/tf/lambda_function_5_payload.zip')
         create_lambda_package(mycwd+'/tf/lambda_function_6.py','lambda_package6',mycwd+'/tf/lambda_function_6_payload.zip')
-        create_lambda_package(mycwd+'/tf/lambda_function_7.py','lambda_package7',mycwd+'/tf/lambda_function_7_payload.zip')
-        create_lambda_package(mycwd+'/tf/lambda_function_8.py','lambda_package8',mycwd+'/tf/lambda_function_8_payload.zip')
 
         terraform_directory = mycwd+"/tf"
         os.chdir(terraform_directory)

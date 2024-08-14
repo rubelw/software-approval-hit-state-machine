@@ -147,9 +147,6 @@ resource "aws_glue_crawler" "cve_crawler" {
     tables        = [aws_glue_catalog_table.cve_table.name]
   }
 
-
-
-
   schema_change_policy {
     delete_behavior = "LOG"
     update_behavior = "LOG"
@@ -168,12 +165,6 @@ resource "aws_glue_crawler" "software_crawler" {
 
   database_name = "software-database" # Glue Data Catalog database
   description   = "A sample Glue Crawler"
-
-
-
-  #s3_target {
-  #  path = "s3://${var.software_bucket_name}/"
-  #}
 
   catalog_target {
     database_name = aws_glue_catalog_database.software_db.name

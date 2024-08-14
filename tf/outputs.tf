@@ -1,13 +1,19 @@
-output "repository_url" {
-  value = aws_ecr_repository.my_repository.repository_url
+
+output "private_subnets" {
+  value = module.vpc.private_subnets
 }
 
-output "state_machine_arn" {
-  value = aws_sfn_state_machine.example.arn
+
+
+output "endpoints" {
+  value = module.vpc_endpoints.endpoints
 }
 
-output "rest_api_id" {
-  description = "REST API id"
+output "rds_address" {
+  value = module.db.db_instance_address
+}
+
+output "api_id" {
   value       = aws_api_gateway_rest_api.example_api.id
 }
 
@@ -25,8 +31,6 @@ output "deployment_execution_arn" {
   description = "Deployment execution ARN"
   value       = aws_api_gateway_deployment.api_gateway_deployment.execution_arn
 }
-
-
 
 output "name" {
   description = "API Gateway name"

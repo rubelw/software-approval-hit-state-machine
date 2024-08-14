@@ -5,6 +5,7 @@
 /tf/.terraform
 /tf/.terraform/*
 /tf/.terraform.lock.hcl
-/test/states/terraform.tfstate
+/terraform.tfstate
 /terraform.tfstate.backup
-/test/states/terraform.tfstate
+/test/terraform.tfstate
+/test/terraform.tfstate.backup

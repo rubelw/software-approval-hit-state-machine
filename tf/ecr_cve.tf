@@ -15,7 +15,7 @@ resource "aws_ecr_repository" "my_repository_cve" {
   image_scanning_configuration {
     scan_on_push = true
   }
-
+  force_delete = true
   tags = {
     Name        = "MyCveECRRepository"
     Environment = "Production"
