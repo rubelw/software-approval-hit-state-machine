@@ -1,11 +1,11 @@
-Software Approval State Machine with Human-in-the-Loop
+Software Approval Process via email
 ======================================================
 
 Features
 ========
 
-1. Downloads CVE's and Approved software list and stores in S3 in queriable format from Athena
-2. User submits request for software approval
+1. Lambda Downloads CVE's and Approved software list and stores in S3 in queriable format from Athena
+2. User submits api gateway request for software approval with
 * Software vendor
 * Software name\
 * Requestor email
@@ -20,16 +20,16 @@ Features
 
 3. API Gateway
 * Custom authorizer validates token
-* Lambda checks dynamodb for CVEs which apply to the software
+* Lambda checks RDS for CVEs which apply to the software
 * If there are CVE, checks the approved CVEs to determine if already approved
-* If not approved, executes stqte machine to get task token
-* state machine sends output to SQS
-* SQS triggers lambda to send email
+* If not approved, sends email to approver
 
-4. User receives email and approves or denies
+
+4. Approver receives email and approves or denies
 
 5. API Gateway receives approved or deny request
-* Review pending approved software matching token and updates dynamodb table
+* Review pending approved software matching token and updates RDS table
+* NOTE:  Checks approved software database, in-case someone else has already approved the software.
 
 
 Setup
