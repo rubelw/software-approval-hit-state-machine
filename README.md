@@ -1,6 +1,8 @@
 Software Approval Process via email
 ======================================================
 
+![Diagram](./diagram.jpg)
+
 Features
 ========
 
